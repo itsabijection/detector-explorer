@@ -191,20 +191,31 @@ def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommu
 
     if reduce_missing:
         # Shrink each missing DOF's total sensitivity by greedily folding in
-        # annotated detectors/observables. Never other missing DOFs (and never
-        # itself): only annotated candidates, so the product stays a valid,
-        # independent representative of the same missing degree of freedom.
-        cand = [e for e in entries if e["kind"] != "missing"]
-        cand_locs = [e["locs"] for e in cand]
-        for e in entries:
-            if e["kind"] != "missing":
-                continue
-            before_locs, before_recs = len(e["locs"]), len(e["recs"])
-            e["locs"], factors = greedy_reduce(dict(e["locs"]), cand_locs)
-            for fi in factors:
-                e["recs"] ^= cand[fi]["recs"]
-            print(f"  reduced {e['id']}: {before_locs} -> {len(e['locs'])} sensitive locations, "
-                  f"{before_recs} -> {len(e['recs'])} recs ({len(factors)} factors folded in)")
+        # annotated detectors/observables and the *other* missing DOFs. Every
+        # step M_i <- M_i * C with C != M_i is an elementary row operation on
+        # the missing subspace, so any sequence of them keeps the reduced set
+        # an independent basis of the same missing degrees of freedom; only
+        # multiplying M_i into itself is forbidden (it would cancel to identity).
+        # Sweep until a full pass over the missing DOFs makes no progress.
+        annotated = [e for e in entries if e["kind"] != "missing"]
+        missing_entries = [e for e in entries if e["kind"] == "missing"]
+        before_stats = {e["id"]: (len(e["locs"]), len(e["recs"])) for e in missing_entries}
+        folded = {e["id"]: 0 for e in missing_entries}
+        for _sweep in range(10):
+            improved = False
+            for e in missing_entries:
+                cand = annotated + [o for o in missing_entries if o is not e]
+                e["locs"], factors = greedy_reduce(dict(e["locs"]), [c["locs"] for c in cand])
+                for fi in factors:
+                    e["recs"] ^= cand[fi]["recs"]
+                folded[e["id"]] += len(factors)
+                improved |= bool(factors)  # accepted steps strictly reduce weight
+            if not improved:
+                break
+        for e in missing_entries:
+            bl, br = before_stats[e["id"]]
+            print(f"  reduced {e['id']}: {bl} -> {len(e['locs'])} sensitive locations, "
+                  f"{br} -> {len(e['recs'])} recs ({folded[e['id']]} factors folded in)")
 
     targets = []
     for e in entries:
