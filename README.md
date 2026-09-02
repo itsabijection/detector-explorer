@@ -19,21 +19,28 @@ python3 -m venv .venv && .venv/bin/pip install stim
 open out.html   # self-contained, no server needed
 ```
 
-By default each missing degree of freedom is preprocessed by a greedy pass that
-repeatedly multiplies in whichever annotated detector/observable most reduces
-the total number of sensitive (tick, qubit) locations in its detecting region,
-stopping when no single multiplication helps. This usually turns a sprawling
-`missing_detectors()` product into a compact region so fewer manual clicks are
-needed. Only annotated detectors and observables are used as factors — never
-the missing DOFs themselves — so each reduced product remains a valid,
-independent representative of its missing degree of freedom (verified: the
-reduced products are still deterministic, and appending them leaves no
-remaining missing detectors). It is a heuristic with no optimality guarantee;
-disable it with `--no-reduce` to see the raw products.
+By default each missing degree of freedom is preprocessed to minimize the total
+number of sensitive (tick, qubit) locations in its detecting region, so the
+viewer starts from a compact product instead of a sprawling
+`missing_detectors()` one. The search is randomized greedy with restarts:
+repeatedly fold in the factor with the most negative location-count delta
+(ties broken randomly; later restarts sometimes explore the second-best tier),
+and when no single factor helps, escape the plateau with *chain moves* — start
+from a low-delta seed, then keep folding candidates that share a location with
+the previous factor until the cumulative delta turns negative (round-to-round
+detector chains often need 100+ links before paying off, so chains are capped
+only by the candidate count). Factors may be annotated detectors, observables,
+and the *other* missing DOFs — each step is an elementary row operation on the
+missing subspace, so the reduced set stays an independent basis; only
+multiplying a DOF into itself is forbidden (it would cancel to identity).
+Verified after reduction: the products remain deterministic and appending them
+leaves no remaining missing detectors. No optimality guarantee; disable with
+`--no-reduce` to see the raw products.
 
 Options:
 
-- `--no-reduce` — skip the greedy sensitivity-reduction pass.
+- `--no-reduce` — skip the sensitivity-reduction pass.
+- `--restarts N` — randomized-greedy restarts per missing detector (default 8).
 - `--unknown-input` — treat circuit inputs as unknown random states when
   finding missing detectors (passed to `missing_detectors`).
 - `--ignore-anticommutation-errors` — silently drop detecting-region components

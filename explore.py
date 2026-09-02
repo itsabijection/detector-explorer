@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import random
 import sys
 import webbrowser
 
@@ -71,43 +72,118 @@ def xor_into(m: dict[tuple[int, int], int], c: dict[tuple[int, int], int]) -> No
             m[loc] = np
 
 
-def greedy_reduce(
-    m: dict[tuple[int, int], int],
-    candidates: list[dict[tuple[int, int], int]],
-) -> tuple[dict[tuple[int, int], int], set[int]]:
-    """Greedily multiply candidate regions into m to minimize m's location count.
+def _delta(m: dict, c: dict) -> int:
+    """Change in location count from multiplying region c into region m."""
+    delta = 0
+    for loc, p in c.items():
+        mp = m.get(loc, 0)
+        if mp == 0:
+            delta += 1      # new location appears
+        elif mp == p:
+            delta -= 1      # same pauli cancels
+        # different pauli: location stays occupied, delta 0
+    return delta
 
-    Each step picks the candidate with the best (most negative) change in total
-    number of sensitive (tick, qubit) locations, until no candidate helps.
-    Candidates must not include m itself (or anything spanning the same missing
-    degree of freedom), or the reduction could cancel m to the identity.
-    Returns (reduced region, set of candidate indices folded in).
+
+def _find_chain(m, candidates, loc_index, seeds, rng, beam, max_chain):
+    """Escape a greedy plateau by chaining multiplications.
+
+    In round-based circuits, annotated detectors form chains in time (the same
+    stabilizer compared round to round): folding one link adds locations in a
+    neighboring round, and only folding the next link cancels them. So we try
+    chains: start from a low-delta seed, then repeatedly fold the best candidate
+    sharing a location with the previously folded factor (interaction requires a
+    shared location, so this pruning is lossless), until the cumulative delta
+    goes strictly negative. Depth-2 chains are exactly "pairs". Returns the
+    accepted chain of candidate indices, or None.
     """
+    seeds = sorted(seeds, key=lambda dc: (dc[0], rng.random()))[:beam]
+    for d0, seed in seeds:
+        work = dict(m)
+        xor_into(work, candidates[seed])
+        chain, used, cum, prev = [seed], {seed}, d0, seed
+        for _ in range(max_chain):
+            if cum < 0:
+                return chain
+            next_ids = {ci for loc in candidates[prev] for ci in loc_index.get(loc, ()) if ci not in used}
+            if not next_ids:
+                break
+            best_d, best_ci = None, None
+            for ci in next_ids:
+                d = _delta(work, candidates[ci])
+                if best_d is None or d < best_d:
+                    best_d, best_ci = d, ci
+            xor_into(work, candidates[best_ci])
+            cum += best_d
+            chain.append(best_ci)
+            used.add(best_ci)
+            prev = best_ci
+        if cum < 0:
+            return chain
+    return None
+
+
+def greedy_reduce(
+    m0: dict[tuple[int, int], int],
+    candidates: list[dict[tuple[int, int], int]],
+    *,
+    rng: random.Random | None = None,
+    restarts: int = 8,
+    beam: int = 12,
+    max_chain: int | None = None,
+) -> tuple[dict[tuple[int, int], int], set[int]]:
+    """Multiply candidate regions into m0 to (heuristically) minimize its
+    total number of sensitive (tick, qubit) locations.
+
+    Randomized greedy with restarts: each attempt repeatedly folds in the
+    candidate with the most negative location-count delta (ties broken
+    randomly; later restarts occasionally pick from the second-best tier), and
+    when no single candidate helps, tries chain moves (see _find_chain) to
+    cross plateaus. The best result over all restarts wins; ties prefer fewer
+    factors. Candidates must not include m0 itself (or anything spanning the
+    same missing degree of freedom), or the reduction could cancel m0 to the
+    identity. Returns (reduced region, parity set of candidate indices folded in).
+    """
+    rng = rng or random.Random(0)
+    # A chain never reuses a factor, so the candidate count is the natural cap.
+    # Long chains matter: a missing DOF spanning many rounds may need a chain
+    # through 100+ round-to-round detectors before the cumulative delta turns
+    # negative, so a small fixed cap silently disables the plateau escape.
+    if max_chain is None:
+        max_chain = len(candidates)
     loc_index: dict[tuple[int, int], list[int]] = {}
     for ci, c in enumerate(candidates):
         for loc in c:
             loc_index.setdefault(loc, []).append(ci)
 
-    factors: set[int] = set()
-    while True:
-        overlapping = {ci for loc in m for ci in loc_index.get(loc, ())}
-        best, best_delta = None, 0
-        for ci in overlapping:
-            delta = 0
-            for loc, p in candidates[ci].items():
-                mp = m.get(loc, 0)
-                if mp == 0:
-                    delta += 1      # new location appears
-                elif mp == p:
-                    delta -= 1      # same pauli cancels
-                # different pauli: location stays occupied, delta 0
-            if delta < best_delta:
-                best, best_delta = ci, delta
-        if best is None:
+    best = None
+    for attempt in range(max(1, restarts)):
+        m = dict(m0)
+        factors: set[int] = set()
+        while True:
+            overlapping = {ci for loc in m for ci in loc_index.get(loc, ())}
+            scored = [(_delta(m, candidates[ci]), ci) for ci in overlapping]
+            neg = [(d, ci) for d, ci in scored if d < 0]
+            if neg:
+                tiers = sorted({d for d, _ in neg})
+                pool_tiers = tiers[:2] if (attempt > 0 and len(tiers) > 1 and rng.random() < 0.35) else tiers[:1]
+                pool = [ci for d, ci in neg if d in pool_tiers]
+                ci = rng.choice(pool)
+                xor_into(m, candidates[ci])
+                factors ^= {ci}
+                continue
+            chain = _find_chain(m, candidates, loc_index, scored, rng, beam, max_chain)
+            if not chain:
+                break
+            for ci in chain:
+                xor_into(m, candidates[ci])
+                factors ^= {ci}
+        key = (len(m), len(factors))
+        if best is None or key < best[0]:
+            best = (key, m, factors)
+        if len(m) == 0:
             break
-        xor_into(m, candidates[best])
-        factors ^= {best}
-    return m, factors
+    return best[1], best[2]
 
 
 NOISE_PREFIXES = ("DEPOLARIZE", "X_ERROR", "Y_ERROR", "Z_ERROR", "PAULI_CHANNEL",
@@ -146,7 +222,7 @@ def ops_by_tick(circuit: stim.Circuit) -> dict[int, list]:
 
 
 def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommutation_errors: bool,
-                 reduce_missing: bool = True) -> dict:
+                 reduce_missing: bool = True, restarts: int = 8) -> dict:
     missing = circuit.missing_detectors(unknown_input=unknown_input)
     full = circuit + missing
     n_orig_dets = circuit.num_detectors
@@ -205,7 +281,9 @@ def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommu
             improved = False
             for e in missing_entries:
                 cand = annotated + [o for o in missing_entries if o is not e]
-                e["locs"], factors = greedy_reduce(dict(e["locs"]), [c["locs"] for c in cand])
+                rng = random.Random(0xD07 + e["index"])
+                e["locs"], factors = greedy_reduce(
+                    dict(e["locs"]), [c["locs"] for c in cand], rng=rng, restarts=restarts)
                 for fi in factors:
                     e["recs"] ^= cand[fi]["recs"]
                 folded[e["id"]] += len(factors)
@@ -249,6 +327,8 @@ def main() -> None:
     parser.add_argument("--no-reduce", action="store_true",
                         help="Skip the greedy pass that shrinks each missing detector's total "
                              "sensitivity by folding in annotated detectors/observables.")
+    parser.add_argument("--restarts", type=int, default=8,
+                        help="Randomized-greedy restarts per missing detector (default 8).")
     parser.add_argument("--title", default=None, help="Title shown in the viewer (default: circuit filename).")
     parser.add_argument("--open", action="store_true", help="Open the generated HTML in a browser.")
     args = parser.parse_args()
@@ -259,6 +339,7 @@ def main() -> None:
         unknown_input=args.unknown_input,
         ignore_anticommutation_errors=args.ignore_anticommutation_errors,
         reduce_missing=not args.no_reduce,
+        restarts=args.restarts,
     )
     data["title"] = args.title or args.circuit.name
 
