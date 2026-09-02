@@ -45,6 +45,71 @@ def measurement_sets(circuit: stim.Circuit) -> tuple[list[set[int]], dict[int, s
     return det_recs, obs_recs
 
 
+# Pauli algebra on codes 0=I 1=X 2=Y 3=Z via (x, z) bits.
+_XB = {0: 0, 1: 1, 2: 1, 3: 0}
+_ZB = {0: 0, 1: 0, 2: 1, 3: 1}
+_P_OF = {(0, 0): 0, (1, 0): 1, (1, 1): 2, (0, 1): 3}
+
+
+def region_locs(tick_regions: dict[int, stim.PauliString]) -> dict[tuple[int, int], int]:
+    """Detecting region as a {(tick, qubit): pauli} dict."""
+    locs = {}
+    for tick, ps in tick_regions.items():
+        for q in ps.pauli_indices():
+            locs[(tick, q)] = ps[q]
+    return locs
+
+
+def xor_into(m: dict[tuple[int, int], int], c: dict[tuple[int, int], int]) -> None:
+    """Multiply region c into region m, in place."""
+    for loc, p in c.items():
+        prev = m.get(loc, 0)
+        np = _P_OF[(_XB[prev] ^ _XB[p], _ZB[prev] ^ _ZB[p])]
+        if np == 0:
+            m.pop(loc, None)
+        else:
+            m[loc] = np
+
+
+def greedy_reduce(
+    m: dict[tuple[int, int], int],
+    candidates: list[dict[tuple[int, int], int]],
+) -> tuple[dict[tuple[int, int], int], set[int]]:
+    """Greedily multiply candidate regions into m to minimize m's location count.
+
+    Each step picks the candidate with the best (most negative) change in total
+    number of sensitive (tick, qubit) locations, until no candidate helps.
+    Candidates must not include m itself (or anything spanning the same missing
+    degree of freedom), or the reduction could cancel m to the identity.
+    Returns (reduced region, set of candidate indices folded in).
+    """
+    loc_index: dict[tuple[int, int], list[int]] = {}
+    for ci, c in enumerate(candidates):
+        for loc in c:
+            loc_index.setdefault(loc, []).append(ci)
+
+    factors: set[int] = set()
+    while True:
+        overlapping = {ci for loc in m for ci in loc_index.get(loc, ())}
+        best, best_delta = None, 0
+        for ci in overlapping:
+            delta = 0
+            for loc, p in candidates[ci].items():
+                mp = m.get(loc, 0)
+                if mp == 0:
+                    delta += 1      # new location appears
+                elif mp == p:
+                    delta -= 1      # same pauli cancels
+                # different pauli: location stays occupied, delta 0
+            if delta < best_delta:
+                best, best_delta = ci, delta
+        if best is None:
+            break
+        xor_into(m, candidates[best])
+        factors ^= {best}
+    return m, factors
+
+
 NOISE_PREFIXES = ("DEPOLARIZE", "X_ERROR", "Y_ERROR", "Z_ERROR", "PAULI_CHANNEL",
                   "CORRELATED_ERROR", "ELSE_CORRELATED_ERROR", "E", "HERALDED", "II_ERROR")
 ANNOTATIONS = {"DETECTOR", "OBSERVABLE_INCLUDE", "QUBIT_COORDS", "SHIFT_COORDS", "TICK", "MPAD", "I", "II"}
@@ -80,7 +145,8 @@ def ops_by_tick(circuit: stim.Circuit) -> dict[int, list]:
     return out
 
 
-def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommutation_errors: bool) -> dict:
+def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommutation_errors: bool,
+                 reduce_missing: bool = True) -> dict:
     missing = circuit.missing_detectors(unknown_input=unknown_input)
     full = circuit + missing
     n_orig_dets = circuit.num_detectors
@@ -101,10 +167,15 @@ def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommu
     for i, q in enumerate(uncoordinated):
         qubits[q] = [float(i), max_y + 2.0]
 
-    targets = []
-    for dem_target, tick_regions in sorted(
-        regions.items(), key=lambda kv: (kv[0].is_logical_observable_id(), kv[0].val)
-    ):
+    # Enumerate all targets explicitly: a target whose detecting region is empty
+    # at every TICK (e.g. a measurement product that multiplies to identity) has
+    # no detecting_regions entry but should still be listed.
+    all_dem_targets = [stim.DemTarget.relative_detector_id(i) for i in range(full.num_detectors)]
+    all_dem_targets += [stim.DemTarget.logical_observable_id(i) for i in range(full.num_observables)]
+
+    entries = []
+    for dem_target in all_dem_targets:
+        tick_regions = regions.get(dem_target, {})
         idx = dem_target.val
         if dem_target.is_logical_observable_id():
             kind, recs, tcoords = "observable", obs_recs.get(idx, set()), None
@@ -112,16 +183,37 @@ def extract_data(circuit: stim.Circuit, *, unknown_input: bool, ignore_anticommu
             kind, recs, tcoords = "missing", det_recs[idx], det_coords.get(idx)
         else:
             kind, recs, tcoords = "detector", det_recs[idx], det_coords.get(idx)
-        targets.append({
+        entries.append({
             "id": f"L{idx}" if kind == "observable" else f"D{idx}",
-            "kind": kind,
-            "index": idx,
-            "coords": tcoords,
-            "recs": sorted(recs),
-            "regions": {
-                str(tick): [[q, ps[q]] for q in ps.pauli_indices()]
-                for tick, ps in tick_regions.items()
-            },
+            "kind": kind, "index": idx, "coords": tcoords,
+            "recs": set(recs), "locs": region_locs(tick_regions),
+        })
+
+    if reduce_missing:
+        # Shrink each missing DOF's total sensitivity by greedily folding in
+        # annotated detectors/observables. Never other missing DOFs (and never
+        # itself): only annotated candidates, so the product stays a valid,
+        # independent representative of the same missing degree of freedom.
+        cand = [e for e in entries if e["kind"] != "missing"]
+        cand_locs = [e["locs"] for e in cand]
+        for e in entries:
+            if e["kind"] != "missing":
+                continue
+            before_locs, before_recs = len(e["locs"]), len(e["recs"])
+            e["locs"], factors = greedy_reduce(dict(e["locs"]), cand_locs)
+            for fi in factors:
+                e["recs"] ^= cand[fi]["recs"]
+            print(f"  reduced {e['id']}: {before_locs} -> {len(e['locs'])} sensitive locations, "
+                  f"{before_recs} -> {len(e['recs'])} recs ({len(factors)} factors folded in)")
+
+    targets = []
+    for e in entries:
+        regs: dict[str, list] = {}
+        for (tick, q), p in sorted(e["locs"].items()):
+            regs.setdefault(str(tick), []).append([q, p])
+        targets.append({
+            "id": e["id"], "kind": e["kind"], "index": e["index"], "coords": e["coords"],
+            "recs": sorted(e["recs"]), "regions": regs,
         })
 
     return {
@@ -143,6 +235,9 @@ def main() -> None:
                         help="Treat circuit inputs as unknown random states when finding missing detectors.")
     parser.add_argument("--ignore-anticommutation-errors", action="store_true",
                         help="Silently drop detecting-region components that anticommute with a reset.")
+    parser.add_argument("--no-reduce", action="store_true",
+                        help="Skip the greedy pass that shrinks each missing detector's total "
+                             "sensitivity by folding in annotated detectors/observables.")
     parser.add_argument("--title", default=None, help="Title shown in the viewer (default: circuit filename).")
     parser.add_argument("--open", action="store_true", help="Open the generated HTML in a browser.")
     args = parser.parse_args()
@@ -152,6 +247,7 @@ def main() -> None:
         circuit,
         unknown_input=args.unknown_input,
         ignore_anticommutation_errors=args.ignore_anticommutation_errors,
+        reduce_missing=not args.no_reduce,
     )
     data["title"] = args.title or args.circuit.name
 

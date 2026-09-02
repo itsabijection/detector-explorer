@@ -19,8 +19,21 @@ python3 -m venv .venv && .venv/bin/pip install stim
 open out.html   # self-contained, no server needed
 ```
 
+By default each missing degree of freedom is preprocessed by a greedy pass that
+repeatedly multiplies in whichever annotated detector/observable most reduces
+the total number of sensitive (tick, qubit) locations in its detecting region,
+stopping when no single multiplication helps. This usually turns a sprawling
+`missing_detectors()` product into a compact region so fewer manual clicks are
+needed. Only annotated detectors and observables are used as factors — never
+the missing DOFs themselves — so each reduced product remains a valid,
+independent representative of its missing degree of freedom (verified: the
+reduced products are still deterministic, and appending them leaves no
+remaining missing detectors). It is a heuristic with no optimality guarantee;
+disable it with `--no-reduce` to see the raw products.
+
 Options:
 
+- `--no-reduce` — skip the greedy sensitivity-reduction pass.
 - `--unknown-input` — treat circuit inputs as unknown random states when
   finding missing detectors (passed to `missing_detectors`).
 - `--ignore-anticommutation-errors` — silently drop detecting-region components
