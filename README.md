@@ -63,7 +63,25 @@ Options:
   Clicking a factor again (or its chip's ×) removes it. `⌘Z`/`ctrl+Z` undoes.
 - **Product bar** shows the current factor chips, the product's weight vs. the
   target's original weight (green when you've simplified it), and a ready-to-
-  paste `DETECTOR rec[...]` line with a copy button.
+  paste `DETECTOR rec[...]` line with copy and **save** buttons.
+- **Save** stores the current product under *Rewritten missing DOFs* in the
+  sidebar (labeled `R0`, `R1`, … with their composition, deletable with ✕).
+  Rewritten DOFs are full targets: click to select, `⊗` to multiply in.
+  The group's **check independence** button verifies, over GF(2) modulo the
+  annotated detectors/observables, that each rewrite represents a genuinely
+  distinct missing DOF (flagging duplicates and rewrites that collapsed into
+  the annotated span) and reports which original missing DOFs the rewrites
+  cover — all green means the saved set is a valid replacement basis ready to
+  paste into the circuit.
+- **Paste a detector** as raw measurement records (e.g.
+  `DETECTOR rec[-1224] rec[-669]`; negative or absolute indices) into the box
+  under the export line. Its detecting region is derived client-side: the
+  rec-vector is decomposed over span(annotated detectors ∪ observables ∪
+  missing DOFs) by Gaussian elimination over GF(2) — that span is exactly the
+  deterministic measurement products, so anything that doesn't reduce to zero
+  is rejected as not-a-detector — and, since Pauli webs compose linearly, the
+  region is the XOR of the decomposition terms' regions. Accepted pastes are
+  saved under *Rewritten missing DOFs* with their decomposition reported.
 - **Timeline strip** shows the product's support weight per tick; click to jump
   to that tick's panel. *Only ticks with support* filters the reel down.
 - **Zoom** with the slider, `+`/`-`, or `ctrl`/`⌘` + scroll. Panels drop the

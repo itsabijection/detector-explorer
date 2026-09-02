@@ -54,6 +54,37 @@
   .trow .badge { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
   .badge.missing { background: var(--warn-bg); color: var(--warn); }
   .badge.observable { background: var(--obs-bg); color: var(--obs); }
+  .badge.rewritten { background: #dcfce7; color: #15803d; }
+  .trow button.del {
+    border: none; background: none; cursor: pointer; font-size: 12px; color: var(--muted);
+    padding: 0 2px; flex: none;
+  }
+  .trow button.del:hover { color: #dc2626; }
+  .group-label { display: flex; align-items: center; gap: 8px; }
+  .group-label .btn.tiny { padding: 0 6px; font-size: 10.5px; text-transform: none; letter-spacing: normal; }
+
+  /* independence report modal */
+  #modal-back {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.35); z-index: 40;
+    display: none; align-items: center; justify-content: center;
+  }
+  #modal {
+    background: var(--panel); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    max-width: 560px; width: min(560px, 90vw); max-height: 80vh; overflow-y: auto; padding: 16px 18px;
+  }
+  #modal h2 { font-size: 14px; margin-bottom: 10px; }
+  #modal .vline { padding: 3px 0; font-size: 12.5px; display: flex; gap: 8px; align-items: baseline; }
+  #modal .vline b { min-width: 44px; }
+  #modal .ok { color: #15803d; }
+  #modal .bad { color: #b91c1c; }
+  #modal .verdict {
+    margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-weight: 600; font-size: 12.5px;
+  }
+  #modal .verdict.ok { background: #dcfce7; }
+  #modal .verdict.bad { background: #fee2e2; }
+  #modal .close-row { margin-top: 12px; text-align: right; }
+  #modal .sect { margin-top: 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--muted); }
   .trow button.mul {
     border: 1px solid var(--line); background: #fff; border-radius: 5px; width: 22px; height: 20px;
     cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); flex: none;
@@ -91,6 +122,14 @@
     overflow-x: auto; white-space: nowrap; flex: 1; color: #374151;
   }
   #weight-pill { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #paste-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #paste-input {
+    flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; color: #374151;
+  }
+  #paste-status { font-size: 12px; white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+  #paste-status.ok { color: #15803d; }
+  #paste-status.bad { color: #b91c1c; }
 
   #timeline-row { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
   #timeline { flex: 1; height: 26px; cursor: pointer; display: block; }
@@ -143,6 +182,7 @@
       overlays:
       <label><input type="checkbox" id="show-detector" checked> detectors</label>
       <label><input type="checkbox" id="show-missing"> missing</label>
+      <label><input type="checkbox" id="show-rewritten"> rewritten</label>
       <label><input type="checkbox" id="show-observable"> observables</label>
     </div>
   </div>
@@ -156,6 +196,13 @@
       <span id="weight-pill"></span>
       <code id="export-line"></code>
       <button class="btn" id="copy-btn">copy</button>
+      <button class="btn" id="save-btn" title="save the current product as a rewritten missing degree of freedom">save</button>
+    </div>
+    <div id="paste-row">
+      <input id="paste-input" type="text" spellcheck="false" autocomplete="off"
+             placeholder="paste a detector, e.g. DETECTOR rec[-1224] rec[-669] — its sensitivity is derived by Gaussian elimination">
+      <button class="btn" id="paste-btn">add</button>
+      <span id="paste-status"></span>
     </div>
   </div>
   <div id="timeline-row">
@@ -173,6 +220,7 @@
 </div>
 
 <div id="popup"></div>
+<div id="modal-back"><div id="modal"></div></div>
 
 <script>
 "use strict";
@@ -186,7 +234,7 @@ const S = {
   showOps: true,
   skipEmpty: false,
   filter: "",
-  overlayKinds: { detector: true, missing: false, observable: false },
+  overlayKinds: { detector: true, missing: false, rewritten: false, observable: false },
   hoverTarget: null,   // target index being hovered (sidebar, popup, or canvas)
 };
 
@@ -206,10 +254,10 @@ function cssVar(n) { return getComputedStyle(document.documentElement).getProper
 /* ============================ product math ============================ */
 function productMembers() { return S.target === null ? S.factors.slice() : [S.target, ...S.factors]; }
 
-function computeProductRegions() {
-  // tick -> Map(qubit -> pauli)
+function combineRegions(indices) {
+  // XOR the regions of the given targets: tick -> Map(qubit -> pauli)
   const out = new Map();
-  for (const ti of productMembers()) {
+  for (const ti of indices) {
     for (const [tickStr, plist] of Object.entries(T[ti].regions)) {
       const tick = +tickStr;
       let m = out.get(tick);
@@ -224,6 +272,14 @@ function computeProductRegions() {
   }
   for (const [tick, m] of out) if (m.size === 0) out.delete(tick);
   return out;
+}
+
+function computeProductRegions() { return combineRegions(productMembers()); }
+
+function serializeRegions(regionMap) {
+  const regs = {};
+  for (const [tick, m] of regionMap) regs[tick] = [...m.entries()].map(([q, p]) => [q, p]);
+  return regs;
 }
 
 function computeProductRecs() {
@@ -508,7 +564,7 @@ function overlayTargetsAt(tick) {
   const members = new Set(productMembers());
   for (let i = 0; i < T.length; i++) {
     const t = T[i];
-    if (i === S.target) continue;
+    if (i === S.target || t.deleted) continue;
     if (!S.overlayKinds[t.kind] && !members.has(i)) continue;
     if (t.regions[tick] === undefined) continue;
     out.push(i);
@@ -651,25 +707,34 @@ document.addEventListener("mousedown", e => { if (!popup.contains(e.target)) hid
 
 /* ============================ sidebar ============================ */
 function label(t) {
-  return t.kind === "missing" ? `${t.id} (missing)` : t.id;
+  if (t.kind === "missing") return `${t.id} (missing)`;
+  if (t.kind === "rewritten") return `${t.id} (rewritten)`;
+  return t.id;
 }
 function metaStr(t) {
   const bits = [`w=${t.recs.length}`];
   if (t.coords && t.coords.length) bits.push("@" + t.coords.map(v => +v.toFixed(2)).join(","));
+  if (t.src) bits.push(t.src);
   return bits.join(" ");
 }
 
 const listEl = document.getElementById("target-list");
+const BADGE_TEXT = { missing: "missing", rewritten: "rewritten", observable: "obs" };
 function buildSidebar() {
   listEl.innerHTML = "";
-  const groups = [["missing", "Missing degrees of freedom"], ["detector", "Detectors"], ["observable", "Observables"]];
+  const groups = [
+    ["missing", "Missing degrees of freedom"],
+    ["rewritten", "Rewritten missing DOFs"],
+    ["detector", "Detectors"],
+    ["observable", "Observables"],
+  ];
   const f = S.filter.trim().toLowerCase();
   const members = new Set(S.factors);
   for (const [kind, gl] of groups) {
     const items = [];
     for (let i = 0; i < T.length; i++) {
       const t = T[i];
-      if (t.kind !== kind) continue;
+      if (t.kind !== kind || t.deleted) continue;
       if (f) {
         const hay = (t.id + " " + (t.coords || []).join(",")).toLowerCase();
         if (!hay.includes(f)) continue;
@@ -678,18 +743,29 @@ function buildSidebar() {
     }
     if (!items.length) continue;
     const g = document.createElement("div");
-    g.className = "group-label"; g.textContent = `${gl} (${items.length})`;
+    g.className = "group-label";
+    g.append(Object.assign(document.createElement("span"), { textContent: `${gl} (${items.length})` }));
+    if (kind === "rewritten") {
+      const chk = document.createElement("button");
+      chk.className = "btn tiny";
+      chk.textContent = "check independence";
+      chk.title = "verify the rewritten DOFs are independent (mod annotated detectors/observables) and see which original missing DOFs they cover";
+      chk.addEventListener("click", runIndependenceCheck);
+      g.append(chk);
+    }
     listEl.append(g);
     for (const i of items) {
       const t = T[i];
       const row = document.createElement("div");
       row.className = "trow" + (i === S.target ? " is-target" : "") + (members.has(i) ? " is-factor" : "");
       row.dataset.ti = i;
-      const badge = t.kind !== "detector" ? `<span class="badge ${t.kind}">${t.kind === "missing" ? "missing" : "obs"}</span>` : "";
+      const badge = t.kind !== "detector" ? `<span class="badge ${t.kind}">${BADGE_TEXT[t.kind]}</span>` : "";
+      const del = t.kind === "rewritten" ? `<button class="del" title="delete this rewritten DOF">✕</button>` : "";
       row.innerHTML = `<span class="tname">${t.id}</span>${badge}<span class="tmeta">${metaStr(t)}</span>
-        <button class="mul" title="multiply into target">⊗</button>`;
+        <button class="mul" title="multiply into target">⊗</button>${del}`;
       row.addEventListener("click", e => {
-        if (e.target.classList.contains("mul")) { toggleFactor(i); }
+        if (e.target.classList.contains("mul")) toggleFactor(i);
+        else if (e.target.classList.contains("del")) deleteRewritten(i);
         else setTarget(i);
       });
       row.addEventListener("mouseenter", () => { S.hoverTarget = i; drawAll(); });
@@ -737,6 +813,7 @@ function buildChips() {
 }
 
 function buildExport() {
+  document.getElementById("save-btn").disabled = S.target === null || productRecs.size === 0;
   if (S.target === null) { exportEl.textContent = ""; weightEl.textContent = ""; return; }
   const recs = [...productRecs].sort((a, b) => a - b);
   const startW = T[S.target].recs.length;
@@ -758,6 +835,216 @@ document.getElementById("copy-btn").addEventListener("click", async () => {
   }
   const b = document.getElementById("copy-btn");
   b.textContent = "copied!"; setTimeout(() => b.textContent = "copy", 900);
+});
+
+/* ============================ rewritten DOFs ============================ */
+let rewrittenCounter = 0;
+
+document.getElementById("save-btn").addEventListener("click", () => {
+  if (S.target === null || productRecs.size === 0) return;
+  const regs = serializeRegions(productRegions);
+  const src = [S.target, ...S.factors].map(i => T[i].id).join("⊗");
+  T.push({
+    id: "R" + rewrittenCounter++,
+    kind: "rewritten",
+    coords: null,
+    src,
+    recs: [...productRecs].sort((a, b) => a - b),
+    regions: regs,
+  });
+  buildSidebar();
+  const b = document.getElementById("save-btn");
+  b.textContent = "saved " + T[T.length - 1].id + "!";
+  setTimeout(() => b.textContent = "save", 1100);
+});
+
+/* ---- paste a detector as raw measurement recs ----
+   The pasted rec-vector is decomposed over span(annotated detectors ∪
+   observables ∪ missing DOFs) by Gaussian elimination over GF(2). That span is
+   exactly the space of deterministic measurement products, so a vector that
+   does not reduce to zero is not a detector and is rejected. Pauli webs
+   compose linearly, so the pasted detector's detecting region is the XOR of
+   the regions of its decomposition terms. */
+function pasteStatus(msg, ok) {
+  const el = document.getElementById("paste-status");
+  el.textContent = msg;
+  el.className = ok ? "ok" : "bad";
+  el.title = msg;
+}
+
+function addPastedDetector() {
+  const txt = document.getElementById("paste-input").value;
+  const NM = DATA.num_measurements;
+  const matches = [...txt.matchAll(/rec\[(-?\d+)\]/g)].map(m => +m[1]);
+  if (!matches.length) { pasteStatus("no rec[...] targets found in the pasted text", false); return; }
+  const recsSet = new Set();
+  for (const val of matches) {
+    const abs = val < 0 ? NM + val : val;
+    if (abs < 0 || abs >= NM) {
+      pasteStatus(`rec[${val}] is out of range (circuit has ${NM} measurements)`, false);
+      return;
+    }
+    recsSet.has(abs) ? recsSet.delete(abs) : recsSet.add(abs);
+  }
+  if (!recsSet.size) { pasteStatus("the pasted recs multiply to identity", false); return; }
+
+  // basis over annotated + missing, each vector tagged with the parity list of
+  // the target indices it combines
+  const basis = new Map();  // leadBit -> {v, ids}
+  for (let ti = 0; ti < T.length; ti++) {
+    const t = T[ti];
+    if (t.deleted || (t.kind !== "detector" && t.kind !== "observable" && t.kind !== "missing")) continue;
+    let v = vecOf(t.recs), ids = [ti];
+    while (v !== 0n) {
+      const b = basis.get(leadBit(v));
+      if (!b) break;
+      v ^= b.v; ids = ids.concat(b.ids);
+    }
+    if (v !== 0n) basis.set(leadBit(v), { v, ids });
+  }
+
+  let v = vecOf([...recsSet]), ids = [];
+  while (v !== 0n) {
+    const b = basis.get(leadBit(v));
+    if (!b) break;
+    v ^= b.v; ids = ids.concat(b.ids);
+  }
+  if (v !== 0n) {
+    pasteStatus("rejected: not a deterministic product — independent of the annotated + missing detectors", false);
+    return;
+  }
+  const counts = new Map();
+  for (const ti of ids) counts.set(ti, (counts.get(ti) || 0) + 1);
+  const parityIds = [...counts.entries()].filter(([, c]) => c % 2).map(([ti]) => ti);
+
+  const entry = {
+    id: "R" + rewrittenCounter++,
+    kind: "rewritten",
+    coords: null,
+    src: "pasted",
+    recs: [...recsSet].sort((a, b) => a - b),
+    regions: serializeRegions(combineRegions(parityIds)),
+  };
+  T.push(entry);
+  const decomp = parityIds.map(ti => T[ti].id).join("⊗");
+  pasteStatus(`saved ${entry.id} (w=${entry.recs.length}) = ${decomp}`, true);
+  document.getElementById("paste-input").value = "";
+  buildSidebar();
+}
+document.getElementById("paste-btn").addEventListener("click", addPastedDetector);
+document.getElementById("paste-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") addPastedDetector();
+});
+document.getElementById("paste-input").addEventListener("input", () => pasteStatus("", true));
+
+function deleteRewritten(ti) {
+  T[ti].deleted = true;  // tombstone: keeps indices of other targets stable
+  if (S.target === ti) { S.target = null; S.factors = []; }
+  S.factors = S.factors.filter(i => i !== ti);
+  update();
+}
+
+/* ---- GF(2) independence check over measurement-record vectors ----
+   Raw rec-vectors are almost always trivially independent; the meaningful
+   question is independence *modulo the annotated group* (detectors and
+   observables): does each rewrite represent a genuinely distinct missing
+   degree of freedom, and which original missing DOFs does the set cover? */
+function vecOf(recs) {
+  let v = 0n;
+  for (const r of recs) v |= 1n << BigInt(r);
+  return v;
+}
+function leadBit(v) { return v.toString(2).length - 1; }
+function reduceMod(v, basis) {  // basis: Map(leadBit -> vector)
+  while (v !== 0n) {
+    const b = basis.get(leadBit(v));
+    if (b === undefined) break;
+    v ^= b;
+  }
+  return v;
+}
+function insertBasis(basis, v) {
+  v = reduceMod(v, basis);
+  if (v !== 0n) basis.set(leadBit(v), v);
+  return v;
+}
+
+// Fully reduce v against the annotated basis and the rewrite basis together.
+// Interleaving matters: XORing with a rewrite vector can reintroduce lead bits
+// the annotated basis handles, and vice versa. usedIds (optional) collects the
+// ids of rewrite-basis vectors consumed, so dependencies can be named.
+function reduceFull(v, annotated, rBasis, usedIds) {
+  while (v !== 0n) {
+    const lb = leadBit(v);
+    const a = annotated.get(lb);
+    if (a !== undefined) { v ^= a; continue; }
+    const r = rBasis.get(lb);
+    if (r !== undefined) { v ^= r.v; if (usedIds) usedIds.push(...r.ids); continue; }
+    break;
+  }
+  return v;
+}
+
+function runIndependenceCheck() {
+  const annotated = new Map();
+  for (const t of T) {
+    if (t.deleted) continue;
+    if (t.kind === "detector" || t.kind === "observable") insertBasis(annotated, vecOf(t.recs));
+  }
+  const rewrites = T.filter(t => t.kind === "rewritten" && !t.deleted);
+  const originals = T.filter(t => t.kind === "missing" && !t.deleted);
+
+  const rBasis = new Map();  // leadBit -> {v, ids}; lead bits disjoint from annotated's
+  const lines = [];
+  let independent = 0;
+  for (const r of rewrites) {
+    const used = [];
+    const v = reduceFull(vecOf(r.recs), annotated, rBasis, used);
+    if (v === 0n) {
+      lines.push({
+        id: r.id, ok: false,
+        msg: used.length
+          ? `dependent — equals ${[...new Set(used)].join("⊗")} (mod annotated)`
+          : "lies in the span of the annotated detectors/observables — represents no missing DOF",
+      });
+    } else {
+      rBasis.set(leadBit(v), { v, ids: [r.id] });
+      independent++;
+      lines.push({ id: r.id, ok: true, msg: "independent (mod annotated + earlier rewrites)" });
+    }
+  }
+
+  // Which original missing DOFs lie in span(annotated ∪ rewrites)?
+  const coverage = originals.map(m => ({
+    id: m.id,
+    covered: reduceFull(vecOf(m.recs), annotated, rBasis) === 0n,
+  }));
+
+  const nCovered = coverage.filter(c => c.covered).length;
+  const allOk = lines.every(l => l.ok) && nCovered === originals.length && rewrites.length > 0;
+  const modal = document.getElementById("modal");
+  let html = `<h2>Independence check</h2>`;
+  if (!rewrites.length) html += `<div class="vline">no rewritten DOFs saved yet</div>`;
+  for (const l of lines) {
+    html += `<div class="vline"><b>${l.id}</b><span class="${l.ok ? "ok" : "bad"}">${l.ok ? "✓" : "✗"} ${l.msg}</span></div>`;
+  }
+  if (originals.length) {
+    html += `<div class="sect">coverage of original missing DOFs</div>`;
+    for (const c of coverage) {
+      html += `<div class="vline"><b>${c.id}</b><span class="${c.covered ? "ok" : "bad"}">` +
+        `${c.covered ? "✓ covered by annotated + rewrites" : "✗ not covered — this DOF still needs a rewrite"}</span></div>`;
+    }
+  }
+  const verdict = allOk
+    ? `✓ ${independent} independent rewrite${independent === 1 ? "" : "s"} covering all ${originals.length} missing DOF${originals.length === 1 ? "" : "s"} — a valid replacement basis`
+    : `${independent}/${rewrites.length} rewrites independent · ${nCovered}/${originals.length} missing DOFs covered`;
+  html += `<div class="verdict ${allOk ? "ok" : "bad"}">${verdict}</div>`;
+  html += `<div class="close-row"><button class="btn" onclick="document.getElementById('modal-back').style.display='none'">close</button></div>`;
+  modal.innerHTML = html;
+  document.getElementById("modal-back").style.display = "flex";
+}
+document.getElementById("modal-back").addEventListener("click", e => {
+  if (e.target.id === "modal-back") e.target.style.display = "none";
 });
 
 /* ============================ timeline ============================ */
@@ -813,7 +1100,7 @@ slicesEl.addEventListener("wheel", e => {
 document.getElementById("skip-empty").addEventListener("change", e => { S.skipEmpty = e.target.checked; buildPanels(); });
 document.getElementById("show-gates").addEventListener("change", e => { S.showOps = e.target.checked; buildPanels(); });
 document.getElementById("filter").addEventListener("input", e => { S.filter = e.target.value; buildSidebar(); });
-for (const kind of ["detector", "missing", "observable"]) {
+for (const kind of ["detector", "missing", "rewritten", "observable"]) {
   document.getElementById("show-" + kind).addEventListener("change", e => {
     S.overlayKinds[kind] = e.target.checked; drawAll();
   });
@@ -823,7 +1110,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "+" || e.key === "=") setZoom(S.zoom + 40);
   else if (e.key === "-" || e.key === "_") setZoom(S.zoom - 40);
   else if (e.key === "z" && (e.metaKey || e.ctrlKey)) { S.factors.pop(); update(); e.preventDefault(); }
-  else if (e.key === "Escape") hidePopup();
+  else if (e.key === "Escape") { hidePopup(); document.getElementById("modal-back").style.display = "none"; }
 });
 window.addEventListener("resize", () => drawTimeline());
 
