@@ -70,9 +70,11 @@ Options:
   The group's **check independence** button verifies, over GF(2) modulo the
   annotated detectors/observables, that each rewrite represents a genuinely
   distinct missing DOF (flagging duplicates and rewrites that collapsed into
-  the annotated span) and reports which original missing DOFs the rewrites
-  cover — all green means the saved set is a valid replacement basis ready to
-  paste into the circuit.
+  the annotated span), shows each rewrite's decomposition over the original
+  missing DOFs (a rewrite can represent a *product* like `D22⊗D23`, which is
+  then covered as a whole even though neither factor is individually), and
+  reports which original missing DOFs are covered — all green means the saved
+  set is a valid replacement basis ready to paste into the circuit.
 - **Paste a detector** as raw measurement records (e.g.
   `DETECTOR rec[-1224] rec[-669]`; negative or absolute indices) into the box
   under the export line. Its detecting region is derived client-side: the

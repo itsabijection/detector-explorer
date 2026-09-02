@@ -994,6 +994,28 @@ function runIndependenceCheck() {
   const rewrites = T.filter(t => t.kind === "rewritten" && !t.deleted);
   const originals = T.filter(t => t.kind === "missing" && !t.deleted);
 
+  // Basis of the original missing DOFs (mod annotated), tracking ids, so each
+  // rewrite can be expressed in terms of the originals. A rewrite representing
+  // a *product* like M2⊗M3 is an independent missing DOF that covers the
+  // product as a whole while covering neither factor individually — showing
+  // the decomposition makes that legible.
+  const parity = ids => {
+    const counts = new Map();
+    for (const x of ids) counts.set(x, (counts.get(x) || 0) + 1);
+    return [...counts.entries()].filter(([, c]) => c % 2).map(([x]) => x);
+  };
+  const oBasis = new Map();  // leadBit -> {v, ids: original ids, parity}
+  for (const m of originals) {
+    const ids = [m.id];
+    const v = reduceFull(vecOf(m.recs), annotated, oBasis, ids);
+    if (v !== 0n) oBasis.set(leadBit(v), { v, ids: parity(ids) });
+  }
+  const decompOf = recs => {
+    const ids = [];
+    const v = reduceFull(vecOf(recs), annotated, oBasis, ids);
+    return v === 0n ? parity(ids) : null;
+  };
+
   const rBasis = new Map();  // leadBit -> {v, ids}; lead bits disjoint from annotated's
   const lines = [];
   let independent = 0;
@@ -1010,7 +1032,11 @@ function runIndependenceCheck() {
     } else {
       rBasis.set(leadBit(v), { v, ids: [r.id] });
       independent++;
-      lines.push({ id: r.id, ok: true, msg: "independent (mod annotated + earlier rewrites)" });
+      const dec = decompOf(r.recs);
+      lines.push({
+        id: r.id, ok: true,
+        msg: "independent — represents " + (dec && dec.length ? dec.join("⊗") : "?") + " (mod annotated)",
+      });
     }
   }
 
@@ -1037,8 +1063,13 @@ function runIndependenceCheck() {
   }
   const verdict = allOk
     ? `✓ ${independent} independent rewrite${independent === 1 ? "" : "s"} covering all ${originals.length} missing DOF${originals.length === 1 ? "" : "s"} — a valid replacement basis`
-    : `${independent}/${rewrites.length} rewrites independent · ${nCovered}/${originals.length} missing DOFs covered`;
+    : `${independent}/${rewrites.length} rewrites independent, spanning ${independent} of ${originals.length} missing dimensions · ${nCovered}/${originals.length} original DOFs covered individually`;
   html += `<div class="verdict ${allOk ? "ok" : "bad"}">${verdict}</div>`;
+  if (independent > nCovered) {
+    html += `<div class="vline" style="color:var(--muted)">note: a rewrite can represent a <i>product</i> of ` +
+      `original DOFs (see each rewrite's decomposition above) — the product is then covered as a whole even ` +
+      `though no individual factor is. Once the rewrites span all ${originals.length} dimensions, every original is covered.</div>`;
+  }
   html += `<div class="close-row"><button class="btn" onclick="document.getElementById('modal-back').style.display='none'">close</button></div>`;
   modal.innerHTML = html;
   document.getElementById("modal-back").style.display = "flex";
