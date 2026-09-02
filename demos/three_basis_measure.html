@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detector Basis Explorer</title>
+<style>
+  :root {
+    --bg: #fafafa; --panel: #ffffff; --ink: #1a1a2e; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --warn: #b45309; --warn-bg: #fef3c7;
+    --obs: #7c3aed; --obs-bg: #ede9fe;
+    --x-color: #e02020; --y-color: #1a9e1a; --z-color: #2040e0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--ink);
+    display: grid; grid-template-rows: auto 1fr; grid-template-columns: 300px 1fr;
+    grid-template-areas: "header header" "sidebar main"; overflow: hidden;
+  }
+  header {
+    grid-area: header; display: flex; align-items: center; gap: 16px;
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .legend { display: flex; gap: 10px; margin-left: auto; align-items: center; font-size: 12px; color: var(--muted); }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+
+  /* ---- sidebar ---- */
+  #sidebar {
+    grid-area: sidebar; background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #sidebar .tools { padding: 8px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+  #filter { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  .kind-toggles { display: flex; gap: 10px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+  .kind-toggles label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+  #target-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .group-label {
+    padding: 7px 12px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .trow {
+    display: flex; align-items: center; gap: 7px; padding: 3px 10px 3px 12px;
+    cursor: pointer; border-left: 3px solid transparent; user-select: none;
+  }
+  .trow:hover { background: #f3f4f6; }
+  .trow.is-target { background: #dbeafe; border-left-color: var(--accent); }
+  .trow.is-factor { background: #eff6ff; border-left-color: #93c5fd; }
+  .trow .tname { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 34px; }
+  .trow .tmeta { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trow .badge { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+  .badge.missing { background: var(--warn-bg); color: var(--warn); }
+  .badge.observable { background: var(--obs-bg); color: var(--obs); }
+  .trow button.mul {
+    border: 1px solid var(--line); background: #fff; border-radius: 5px; width: 22px; height: 20px;
+    cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); flex: none;
+  }
+  .trow button.mul:hover { border-color: var(--accent); color: var(--accent); }
+  .trow.is-factor button.mul { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ---- main ---- */
+  #main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #product-bar {
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 24px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 12px;
+    background: #eef2ff; border: 1px solid #c7d2fe; font-size: 12px; font-weight: 600;
+  }
+  .chip.target-chip { background: #dbeafe; border-color: var(--accent); }
+  .chip.missing { background: var(--warn-bg); border-color: #fcd34d; }
+  .chip .rm { cursor: pointer; color: var(--muted); font-weight: 700; }
+  .chip .rm:hover { color: #dc2626; }
+  .chip-hint { color: var(--muted); font-size: 12px; }
+  #chips .btn { margin-left: 2px; }
+  .btn {
+    border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 3px 9px;
+    font-size: 12px; cursor: pointer; color: var(--ink);
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  #export-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #export-line {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    background: #f3f4f6; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+    overflow-x: auto; white-space: nowrap; flex: 1; color: #374151;
+  }
+  #weight-pill { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  #timeline-row { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #timeline { flex: 1; height: 26px; cursor: pointer; display: block; }
+  #timeline-row .nav { display: flex; gap: 4px; align-items: center; }
+  #tick-label { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 90px; text-align: center; }
+  select { border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; font-size: 12px; background: #fff; }
+  #timeline-row label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+  #zoom { width: 130px; accent-color: var(--accent); }
+
+  /* max-content rows: with auto rows, grid compresses rows to fit the container's
+     height instead of overflowing, which collapsed panels into clipped slivers */
+  #slices { flex: 1; overflow: auto; padding: 10px; display: grid; gap: 10px; align-content: start; grid-auto-rows: max-content; }
+  .slice { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; position: relative; }
+  .slice .cap {
+    position: absolute; top: 4px; left: 8px; font-size: 11px; font-weight: 700; color: var(--muted);
+    pointer-events: none; font-variant-numeric: tabular-nums;
+  }
+  .slice canvas { display: block; cursor: crosshair; }
+
+  #popup {
+    position: fixed; z-index: 20; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.14); padding: 4px; display: none;
+    max-height: 260px; overflow-y: auto; min-width: 150px;
+  }
+  #popup .pitem { padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
+  #popup .pitem:hover { background: #eff6ff; }
+  #popup .pitem .tmeta { color: var(--muted); font-size: 11px; }
+  #hint {
+    padding: 40px; text-align: center; color: var(--muted); font-size: 13px;
+  }
+  kbd { background:#f3f4f6; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 4px; font-size:11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Detector Basis Explorer</h1>
+  <span class="sub" id="subtitle"></span>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--x-color)"></span>X</span>
+    <span><span class="sw" style="background:var(--y-color)"></span>Y</span>
+    <span><span class="sw" style="background:var(--z-color)"></span>Z</span>
+    <span style="border-left:1px solid var(--line); padding-left:10px;">click a faint polygon to multiply it into the target</span>
+  </div>
+</header>
+
+<div id="sidebar">
+  <div class="tools">
+    <input id="filter" type="search" placeholder="filter by id or coords… e.g. D14 or 2,4">
+    <div class="kind-toggles">
+      overlays:
+      <label><input type="checkbox" id="show-detector" checked> detectors</label>
+      <label><input type="checkbox" id="show-missing"> missing</label>
+      <label><input type="checkbox" id="show-observable"> observables</label>
+    </div>
+  </div>
+  <div id="target-list"></div>
+</div>
+
+<div id="main">
+  <div id="product-bar">
+    <div id="chips"></div>
+    <div id="export-row">
+      <span id="weight-pill"></span>
+      <code id="export-line"></code>
+      <button class="btn" id="copy-btn">copy</button>
+    </div>
+  </div>
+  <div id="timeline-row">
+    <canvas id="timeline" title="support of the current product over time — click to jump"></canvas>
+    <span id="tick-label"></span>
+    <div class="nav">
+      <button class="btn" id="zoom-out" title="smaller slices (also - key, or ctrl+scroll)">−</button>
+      <input id="zoom" type="range" min="90" max="560" step="10" title="slice size" autocomplete="off">
+      <button class="btn" id="zoom-in" title="larger slices (also + key, or ctrl+scroll)">+</button>
+    </div>
+    <label><input type="checkbox" id="show-gates" checked> gates</label>
+    <label><input type="checkbox" id="skip-empty"> only ticks with support</label>
+  </div>
+  <div id="slices"></div>
+</div>
+
+<div id="popup"></div>
+
+<script>
+"use strict";
+const DATA = {"num_ticks":2,"num_measurements":6,"num_missing":1,"qubits":{"0":[0.0,0.0],"1":[2.0,0.0]},"ops":{"0":[{"g":"MZZ","t":[[[0,null],[1,null]]]},{"g":"MYY","t":[[[0,null],[1,null]]]},{"g":"MXX","t":[[[0,null],[1,null]]]}],"1":[{"g":"MZZ","t":[[[0,null],[1,null]]]},{"g":"MYY","t":[[[0,null],[1,null]]]},{"g":"MXX","t":[[[0,null],[1,null]]]}]},"targets":[{"id":"D0","kind":"detector","index":0,"coords":[],"recs":[2,5],"regions":{"0":[[0,1],[1,1]]}},{"id":"D1","kind":"detector","index":1,"coords":[],"recs":[1,4],"regions":{"0":[[0,2],[1,2]]}},{"id":"D2","kind":"detector","index":2,"coords":[],"recs":[0,3],"regions":{"0":[[0,3],[1,3]]}}],"title":"three_basis_measure.stim"};
+
+/* ============================ state ============================ */
+const S = {
+  target: null,        // index into DATA.targets, or null
+  factors: [],         // ordered list of target indices multiplied in
+  zoom: 240,           // slice panel width in px
+  showOps: true,
+  skipEmpty: false,
+  filter: "",
+  overlayKinds: { detector: true, missing: false, observable: false },
+  hoverTarget: null,   // target index being hovered (sidebar, popup, or canvas)
+};
+
+const T = DATA.targets;
+const NT = DATA.num_ticks;
+const OPS = DATA.ops || {};
+const QUBITS = Object.entries(DATA.qubits).map(([q, xy]) => ({ q: +q, x: xy[0], y: xy[1] }));
+const QPOS = new Map(QUBITS.map(o => [o.q, o]));
+
+/* pauli codes: 1=X 2=Y 3=Z; xor via (x,z) bits */
+const XB = [0, 1, 1, 0], ZB = [0, 0, 1, 1];
+const P_OF = [[0, 3], [1, 2]]; // P_OF[x][z]
+const PCOLOR = { 1: cssVar("--x-color"), 2: cssVar("--y-color"), 3: cssVar("--z-color") };
+const PLETTER = { 1: "X", 2: "Y", 3: "Z" };
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+/* ============================ product math ============================ */
+function productMembers() { return S.target === null ? S.factors.slice() : [S.target, ...S.factors]; }
+
+function computeProductRegions() {
+  // tick -> Map(qubit -> pauli)
+  const out = new Map();
+  for (const ti of productMembers()) {
+    for (const [tickStr, plist] of Object.entries(T[ti].regions)) {
+      const tick = +tickStr;
+      let m = out.get(tick);
+      if (!m) { m = new Map(); out.set(tick, m); }
+      for (const [q, p] of plist) {
+        const prev = m.get(q) || 0;
+        const x = XB[prev] ^ XB[p], z = ZB[prev] ^ ZB[p];
+        const np = P_OF[x][z];
+        if (np === 0) m.delete(q); else m.set(q, np);
+      }
+    }
+  }
+  for (const [tick, m] of out) if (m.size === 0) out.delete(tick);
+  return out;
+}
+
+function computeProductRecs() {
+  const s = new Set();
+  for (const ti of productMembers())
+    for (const r of T[ti].recs) s.has(r) ? s.delete(r) : s.add(r);
+  return s;
+}
+
+let productRegions = new Map();
+let productRecs = new Set();
+
+/* ============================ geometry ============================ */
+const bounds = (() => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const o of QUBITS) { x0 = Math.min(x0, o.x); y0 = Math.min(y0, o.y); x1 = Math.max(x1, o.x); y1 = Math.max(y1, o.y); }
+  if (!isFinite(x0)) { x0 = y0 = 0; x1 = y1 = 1; }
+  if (x1 - x0 < 1e-9) x1 = x0 + 1;
+  if (y1 - y0 < 1e-9) y1 = y0 + 1;
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+})();
+
+/* shape for a set of {x,y,p} points, in *panel pixel* coords */
+function makeShape(pts, inflate) {
+  if (pts.length === 0) return null;
+  if (pts.length === 1) return { type: "circle", c: pts[0], r: inflate, pts };
+  if (pts.length === 2) return { type: "capsule", a: pts[0], b: pts[1], w: inflate, pts };
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  // collinearity check
+  let maxCross = 0, span = 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  for (const p of pts) {
+    maxCross = Math.max(maxCross, Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)));
+    span = Math.max(span, Math.hypot(p.x - a.x, p.y - a.y));
+  }
+  if (maxCross < span * 2 + 1e-9 && maxCross < 40) {
+    // (nearly) collinear: capsule between the two extreme points
+    let pa = pts[0], pb = pts[0], best = -1;
+    for (const p of pts) for (const q of pts) {
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (d > best) { best = d; pa = p; pb = q; }
+    }
+    return { type: "capsule", a: pa, b: pb, w: inflate, pts };
+  }
+  const ordered = pts.slice().sort((p, q) => Math.atan2(p.y - cy, p.x - cx) - Math.atan2(q.y - cy, q.x - cx));
+  const infl = ordered.map(p => {
+    const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) || 1;
+    return { x: p.x + dx / d * inflate, y: p.y + dy / d * inflate, p: p.p };
+  });
+  return { type: "poly", pts: infl, cx, cy };
+}
+
+function shapeContains(sh, x, y) {
+  if (!sh) return false;
+  if (sh.type === "circle") return Math.hypot(x - sh.c.x, y - sh.c.y) <= sh.r;
+  if (sh.type === "capsule") {
+    const { a, b, w } = sh;
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    let t = len2 ? ((x - a.x) * dx + (y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)) <= w;
+  }
+  const pts = sh.pts;
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function tracePath(ctx, sh) {
+  ctx.beginPath();
+  if (sh.type === "circle") ctx.arc(sh.c.x, sh.c.y, sh.r, 0, 7);
+  else if (sh.type === "capsule") {
+    const { a, b, w } = sh;
+    const th = Math.atan2(b.y - a.y, b.x - a.x);
+    ctx.arc(a.x, a.y, w, th + Math.PI / 2, th - Math.PI / 2);
+    ctx.arc(b.x, b.y, w, th - Math.PI / 2, th + Math.PI / 2);
+    ctx.closePath();
+  }
+  else {
+    ctx.moveTo(sh.pts[0].x, sh.pts[0].y);
+    for (let i = 1; i < sh.pts.length; i++) ctx.lineTo(sh.pts[i].x, sh.pts[i].y);
+    ctx.closePath();
+  }
+}
+
+function fillShape(ctx, sh, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (sh.type === "capsule") {
+    const g = ctx.createLinearGradient(sh.a.x, sh.a.y, sh.b.x, sh.b.y);
+    g.addColorStop(0, PCOLOR[sh.a.p]); g.addColorStop(0.499, PCOLOR[sh.a.p]);
+    g.addColorStop(0.501, PCOLOR[sh.b.p]); g.addColorStop(1, PCOLOR[sh.b.p]);
+    ctx.fillStyle = g;
+    tracePath(ctx, sh); ctx.fill();
+  } else if (sh.type === "circle") {
+    ctx.fillStyle = PCOLOR[sh.c.p];
+    tracePath(ctx, sh); ctx.fill();
+  } else {
+    const pts = sh.pts, n = pts.length;
+    const uniform = pts.every(p => p.p === pts[0].p);
+    if (uniform) { ctx.fillStyle = PCOLOR[pts[0].p]; tracePath(ctx, sh); ctx.fill(); }
+    else {
+      // wedge per vertex: centroid -> mid(prev) -> vertex -> mid(next)
+      for (let i = 0; i < n; i++) {
+        const v = pts[i], pv = pts[(i - 1 + n) % n], nv = pts[(i + 1) % n];
+        ctx.fillStyle = PCOLOR[v.p];
+        ctx.beginPath();
+        ctx.moveTo(sh.cx, sh.cy);
+        ctx.lineTo((v.x + pv.x) / 2, (v.y + pv.y) / 2);
+        ctx.lineTo(v.x, v.y);
+        ctx.lineTo((v.x + nv.x) / 2, (v.y + nv.y) / 2);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function strokeShape(ctx, sh, color, width, dash) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  if (dash) ctx.setLineDash(dash);
+  tracePath(ctx, sh);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ============================ layout / slices ============================ */
+const slicesEl = document.getElementById("slices");
+const panels = [];  // {tick, canvas, ctx, shapes:[{ti, shape}], productShape}
+let panelW = 240, panelH = 220, PAD = 22, SCALE = 1, UNIT = 20;
+
+function shownTicks() {
+  const all = [...Array(NT).keys()];
+  if (S.showOps && OPS[NT]) all.push(NT);  // ops after the final TICK (e.g. data measurements)
+  if (!S.skipEmpty || productRegions.size === 0) return all;
+  return all.filter(t => productRegions.has(t) || (t === NT && S.showOps));
+}
+
+function computePanelSize() {
+  panelW = S.zoom;
+  SCALE = Math.max(0.35, Math.min(1.25, panelW / 300));
+  PAD = Math.max(9, Math.round(panelW * 0.09));
+  const aspect = (bounds.h + 0.0001) / (bounds.w + 0.0001);
+  panelH = Math.round(Math.min(Math.max(panelW * aspect * 0.9 + 24, 64), panelW * 2));
+  UNIT = Math.min((panelW - 2 * PAD) / bounds.w, (panelH - 2 * PAD) / bounds.h);
+}
+
+function toPx(x, y) {
+  const sw = (panelW - 2 * PAD) / bounds.w, sh = (panelH - 2 * PAD) / bounds.h;
+  const s = Math.min(sw, sh);
+  const ox = (panelW - bounds.w * s) / 2, oy = (panelH - bounds.h * s) / 2;
+  return { x: ox + (x - bounds.x0) * s, y: oy + (y - bounds.y0) * s };
+}
+
+function regionPts(plist) {
+  const pts = [];
+  for (const [q, p] of plist) {
+    const qp = QPOS.get(q);
+    if (!qp) continue;
+    const px = toPx(qp.x, qp.y);
+    pts.push({ x: px.x, y: px.y, p });
+  }
+  return pts;
+}
+
+function buildPanels() {
+  const ticks = shownTicks();
+
+  computePanelSize();
+  slicesEl.style.gridTemplateColumns = `repeat(auto-fill, ${panelW}px)`;
+  slicesEl.innerHTML = "";
+  panels.length = 0;
+
+  if (ticks.length === 0) {
+    slicesEl.innerHTML = `<div id="hint">no ticks to show</div>`;
+    return;
+  }
+  const dpr = window.devicePixelRatio || 1;
+  for (const tick of ticks) {
+    const div = document.createElement("div");
+    div.className = "slice";
+    const cap = document.createElement("span");
+    cap.className = "cap";
+    cap.textContent = tick === NT ? "end" : (panelW < 150 ? "t" : "tick ") + tick;
+    if (panelW < 150) cap.style.fontSize = "9px";
+    const cv = document.createElement("canvas");
+    cv.width = panelW * dpr; cv.height = panelH * dpr;
+    cv.style.width = panelW + "px"; cv.style.height = panelH + "px";
+    div.append(cv, cap);
+    slicesEl.append(div);
+    const ctx = cv.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const panel = { tick, canvas: cv, ctx, shapes: [], productShape: null };
+    cv.addEventListener("click", e => onSliceClick(panel, e));
+    cv.addEventListener("mousemove", e => onSliceHover(panel, e));
+    cv.addEventListener("mouseleave", () => { if (S.hoverTarget !== null) { S.hoverTarget = null; drawAll(); } });
+    panels.push(panel);
+  }
+  drawAll();
+}
+
+/* ---- gate rendering ---- */
+function opLabel(name) {
+  return name.replace("SQRT_", "√").replace("_DAG", "†");
+}
+
+function glyphBox(ctx, x, y, label, k) {
+  const showText = k >= 0.55 && label.length <= 5;
+  const w = showText ? Math.max(11, 6.0 * label.length + 5) * k : 6.5 * k;
+  const h = (showText ? 11.5 : 6.5) * k;
+  ctx.save();
+  ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#8a919c";
+  ctx.beginPath(); ctx.roundRect(x - w / 2, y - h / 2, w, h, 2.5 * k);
+  ctx.fill(); ctx.stroke();
+  if (showText) {
+    ctx.fillStyle = "#4b5563";
+    ctx.fillText(label, x, y + 0.5);
+  }
+  ctx.restore();
+}
+
+function drawOps(ctx, tick) {
+  const ops = OPS[tick];
+  if (!ops) return;
+  const k = Math.max(0.42, Math.min(1.1, UNIT / 26));
+  ctx.save();
+  ctx.strokeStyle = "#8a919c"; ctx.fillStyle = "#8a919c";
+  ctx.lineWidth = Math.max(0.7, 1.1 * SCALE);
+  ctx.font = `600 ${Math.max(7, Math.round(8.5 * k))}px ui-monospace, Menlo, monospace`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const op of ops) for (const grp of op.t) {
+    const pts = [];
+    for (const [q, l] of grp) {
+      const o = QPOS.get(q);
+      if (o) { const p = toPx(o.x, o.y); pts.push({ x: p.x, y: p.y, l }); }
+    }
+    if (!pts.length) continue;
+    if (pts.length >= 2) {
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+    if ((op.g === "CX" || op.g === "CY" || op.g === "CZ") && pts.length === 2) {
+      ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, 2.4 * k, 0, 7); ctx.fill();
+      const tp = pts[1];
+      if (op.g === "CX") {
+        const r = 4.0 * k;
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, r, 0, 7); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(tp.x - r, tp.y); ctx.lineTo(tp.x + r, tp.y);
+        ctx.moveTo(tp.x, tp.y - r); ctx.lineTo(tp.x, tp.y + r);
+        ctx.stroke();
+      } else if (op.g === "CZ") {
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, 2.4 * k, 0, 7); ctx.fill();
+      } else {
+        glyphBox(ctx, tp.x, tp.y, "Y", k);
+      }
+    } else if (pts.length === 1) {
+      glyphBox(ctx, pts[0].x, pts[0].y, opLabel(op.g), k);
+    } else {
+      // multi-qubit gate: pauli letters at qubits (MPP), else label at midpoint
+      const hasLetters = pts.some(p => p.l);
+      if (hasLetters) {
+        for (const p of pts) glyphBox(ctx, p.x, p.y, p.l || "?", k);
+      } else {
+        const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+        const my = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+        glyphBox(ctx, mx, my, opLabel(op.g), k);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function overlayTargetsAt(tick) {
+  const out = [];
+  const members = new Set(productMembers());
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i];
+    if (i === S.target) continue;
+    if (!S.overlayKinds[t.kind] && !members.has(i)) continue;
+    if (t.regions[tick] === undefined) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+function drawPanel(panel) {
+  const { ctx, tick } = panel;
+  ctx.clearRect(0, 0, panelW, panelH);
+  panel.shapes = [];
+
+  // qubit dots
+  ctx.fillStyle = "#c8cdd6";
+  const dotR = Math.max(1, Math.min(2.6, UNIT * 0.1));
+  for (const o of QUBITS) {
+    const p = toPx(o.x, o.y);
+    ctx.beginPath(); ctx.arc(p.x, p.y, dotR, 0, 7); ctx.fill();
+  }
+
+  if (S.showOps) drawOps(ctx, tick);
+
+  const members = new Set(productMembers());
+
+  // clickable overlays (faint)
+  const INFL = Math.max(2.5, Math.min(8, UNIT * 0.22));
+  for (const ti of overlayTargetsAt(tick)) {
+    const sh = makeShape(regionPts(T[ti].regions[tick]), INFL);
+    if (!sh) continue;
+    panel.shapes.push({ ti, shape: sh });
+    const isFactor = members.has(ti);
+    const isHover = S.hoverTarget === ti;
+    fillShape(ctx, sh, isHover ? 0.32 : (isFactor ? 0.05 : 0.09));
+    strokeShape(ctx, sh, isHover ? "#111827" : (isFactor ? cssVar("--accent") : "#9aa1ac"),
+      isHover ? 1.6 : 1, isFactor ? [5, 3] : [2, 3]);
+  }
+
+  // current product (prominent)
+  const prod = productRegions.get(tick);
+  panel.productShape = null;
+  if (prod && prod.size) {
+    const pts = regionPts([...prod.entries()]);
+    const sh = makeShape(pts, INFL * 1.3);
+    panel.productShape = sh;
+    fillShape(ctx, sh, 0.42);
+    strokeShape(ctx, sh, "#374151", Math.max(0.8, 1.4 * SCALE));
+    const badgeR = Math.max(2.2, Math.min(7.5, UNIT * 0.3));
+    if (badgeR >= 4.6) {
+      // pauli letters on supported qubits
+      ctx.font = `700 ${Math.round(badgeR * 1.55)}px ui-monospace, Menlo, monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for (const [q, p] of prod) {
+        const qp = QPOS.get(q); if (!qp) continue;
+        const px = toPx(qp.x, qp.y);
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.arc(px.x, px.y, badgeR, 0, 7); ctx.fill();
+        ctx.strokeStyle = PCOLOR[p]; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(px.x, px.y, badgeR, 0, 7); ctx.stroke();
+        ctx.fillStyle = PCOLOR[p];
+        ctx.fillText(PLETTER[p], px.x, px.y + 0.5);
+      }
+    } else {
+      // too small for letters: solid colored dots
+      for (const [q, p] of prod) {
+        const qp = QPOS.get(q); if (!qp) continue;
+        const px = toPx(qp.x, qp.y);
+        ctx.fillStyle = PCOLOR[p];
+        ctx.beginPath(); ctx.arc(px.x, px.y, badgeR, 0, 7); ctx.fill();
+      }
+    }
+  }
+}
+
+function drawAll() { for (const p of panels) drawPanel(p); drawTimeline(); }
+
+/* ============================ interactions ============================ */
+function canvasPos(panel, e) {
+  const r = panel.canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function hitsAt(panel, x, y) {
+  return panel.shapes.filter(s => shapeContains(s.shape, x, y)).map(s => s.ti);
+}
+
+function onSliceClick(panel, e) {
+  hidePopup();
+  const { x, y } = canvasPos(panel, e);
+  const hits = hitsAt(panel, x, y);
+  if (hits.length === 0) return;
+  if (hits.length === 1) { actOn(hits[0]); return; }
+  showPopup(e.clientX, e.clientY, hits);
+}
+
+function onSliceHover(panel, e) {
+  const { x, y } = canvasPos(panel, e);
+  const hits = hitsAt(panel, x, y);
+  const h = hits.length ? hits[hits.length - 1] : null;
+  panel.canvas.title = hits.length ? hits.map(ti => label(T[ti])).join(" · ") : "";
+  if (h !== S.hoverTarget) { S.hoverTarget = h; drawAll(); }
+}
+
+function actOn(ti) {
+  if (S.target === null) setTarget(ti);
+  else toggleFactor(ti);
+}
+
+function setTarget(ti) {
+  S.target = ti;
+  S.factors = [];
+  update();
+}
+
+function toggleFactor(ti) {
+  if (ti === S.target) return;
+  const i = S.factors.indexOf(ti);
+  if (i >= 0) S.factors.splice(i, 1); else S.factors.push(ti);
+  update();
+}
+
+/* popup for overlapping polygons */
+const popup = document.getElementById("popup");
+function showPopup(cx, cy, tis) {
+  popup.innerHTML = "";
+  for (const ti of tis) {
+    const t = T[ti];
+    const d = document.createElement("div");
+    d.className = "pitem";
+    d.innerHTML = `<b>${t.id}</b><span class="tmeta">${metaStr(t)}</span>`;
+    d.addEventListener("mouseenter", () => { S.hoverTarget = ti; drawAll(); });
+    d.addEventListener("click", () => { hidePopup(); actOn(ti); });
+    popup.append(d);
+  }
+  popup.style.display = "block";
+  popup.style.left = Math.min(cx + 4, window.innerWidth - popup.offsetWidth - 8) + "px";
+  popup.style.top = Math.min(cy + 4, window.innerHeight - popup.offsetHeight - 8) + "px";
+}
+function hidePopup() { popup.style.display = "none"; }
+document.addEventListener("mousedown", e => { if (!popup.contains(e.target)) hidePopup(); });
+
+/* ============================ sidebar ============================ */
+function label(t) {
+  return t.kind === "missing" ? `${t.id} (missing)` : t.id;
+}
+function metaStr(t) {
+  const bits = [`w=${t.recs.length}`];
+  if (t.coords && t.coords.length) bits.push("@" + t.coords.map(v => +v.toFixed(2)).join(","));
+  return bits.join(" ");
+}
+
+const listEl = document.getElementById("target-list");
+function buildSidebar() {
+  listEl.innerHTML = "";
+  const groups = [["missing", "Missing degrees of freedom"], ["detector", "Detectors"], ["observable", "Observables"]];
+  const f = S.filter.trim().toLowerCase();
+  const members = new Set(S.factors);
+  for (const [kind, gl] of groups) {
+    const items = [];
+    for (let i = 0; i < T.length; i++) {
+      const t = T[i];
+      if (t.kind !== kind) continue;
+      if (f) {
+        const hay = (t.id + " " + (t.coords || []).join(",")).toLowerCase();
+        if (!hay.includes(f)) continue;
+      }
+      items.push(i);
+    }
+    if (!items.length) continue;
+    const g = document.createElement("div");
+    g.className = "group-label"; g.textContent = `${gl} (${items.length})`;
+    listEl.append(g);
+    for (const i of items) {
+      const t = T[i];
+      const row = document.createElement("div");
+      row.className = "trow" + (i === S.target ? " is-target" : "") + (members.has(i) ? " is-factor" : "");
+      row.dataset.ti = i;
+      const badge = t.kind !== "detector" ? `<span class="badge ${t.kind}">${t.kind === "missing" ? "missing" : "obs"}</span>` : "";
+      row.innerHTML = `<span class="tname">${t.id}</span>${badge}<span class="tmeta">${metaStr(t)}</span>
+        <button class="mul" title="multiply into target">⊗</button>`;
+      row.addEventListener("click", e => {
+        if (e.target.classList.contains("mul")) { toggleFactor(i); }
+        else setTarget(i);
+      });
+      row.addEventListener("mouseenter", () => { S.hoverTarget = i; drawAll(); });
+      row.addEventListener("mouseleave", () => { S.hoverTarget = null; drawAll(); });
+      listEl.append(row);
+    }
+  }
+}
+
+/* ============================ product bar ============================ */
+const chipsEl = document.getElementById("chips");
+const exportEl = document.getElementById("export-line");
+const weightEl = document.getElementById("weight-pill");
+
+function buildChips() {
+  chipsEl.innerHTML = "";
+  if (S.target === null) {
+    chipsEl.innerHTML = `<span class="chip-hint">Pick a target from the sidebar (or click a polygon), then click other detectors to multiply them in.</span>`;
+    return;
+  }
+  const t = T[S.target];
+  const tc = document.createElement("span");
+  tc.className = "chip target-chip" + (t.kind === "missing" ? " missing" : "");
+  tc.innerHTML = `target: ${label(t)} <span class="rm" title="clear target">×</span>`;
+  tc.querySelector(".rm").addEventListener("click", () => { S.target = null; S.factors = []; update(); });
+  chipsEl.append(tc);
+  for (const fi of S.factors) {
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.innerHTML = `⊗ ${T[fi].id} <span class="rm" title="remove factor">×</span>`;
+    c.querySelector(".rm").addEventListener("click", () => toggleFactor(fi));
+    c.addEventListener("mouseenter", () => { S.hoverTarget = fi; drawAll(); });
+    c.addEventListener("mouseleave", () => { S.hoverTarget = null; drawAll(); });
+    chipsEl.append(c);
+  }
+  const undo = document.createElement("button");
+  undo.className = "btn"; undo.textContent = "undo";
+  undo.disabled = S.factors.length === 0;
+  undo.addEventListener("click", () => { S.factors.pop(); update(); });
+  const reset = document.createElement("button");
+  reset.className = "btn"; reset.textContent = "reset";
+  reset.disabled = S.factors.length === 0;
+  reset.addEventListener("click", () => { S.factors = []; update(); });
+  chipsEl.append(undo, reset);
+}
+
+function buildExport() {
+  if (S.target === null) { exportEl.textContent = ""; weightEl.textContent = ""; return; }
+  const recs = [...productRecs].sort((a, b) => a - b);
+  const startW = T[S.target].recs.length;
+  weightEl.textContent = `${recs.length} rec${recs.length === 1 ? "" : "s"}` +
+    (S.factors.length ? ` (target had ${startW})` : "");
+  weightEl.style.color = recs.length < startW ? "#15803d" : (recs.length > startW ? "#b91c1c" : "var(--muted)");
+  exportEl.textContent = recs.length
+    ? "DETECTOR " + recs.map(r => `rec[${r - DATA.num_measurements}]`).join(" ")
+    : "(empty product — the selected factors multiply to identity)";
+}
+
+document.getElementById("copy-btn").addEventListener("click", async () => {
+  const txt = exportEl.textContent;
+  try { await navigator.clipboard.writeText(txt); }
+  catch {
+    const ta = document.createElement("textarea");
+    ta.value = txt; document.body.append(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  const b = document.getElementById("copy-btn");
+  b.textContent = "copied!"; setTimeout(() => b.textContent = "copy", 900);
+});
+
+/* ============================ timeline ============================ */
+const tl = document.getElementById("timeline");
+function drawTimeline() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = tl.clientWidth, h = tl.clientHeight;
+  if (tl.width !== w * dpr) { tl.width = w * dpr; tl.height = h * dpr; }
+  const ctx = tl.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const cw = w / NT;
+  let maxW = 1;
+  for (const [, m] of productRegions) maxW = Math.max(maxW, m.size);
+  for (let t = 0; t < NT; t++) {
+    const m = productRegions.get(t);
+    const wgt = m ? m.size : 0;
+    ctx.fillStyle = wgt ? `rgba(37, 99, 235, ${0.25 + 0.65 * wgt / maxW})` : "#eceef1";
+    const bh = wgt ? Math.max(4, (h - 6) * wgt / maxW) : 3;
+    ctx.fillRect(t * cw + 0.5, h - 2 - bh, Math.max(1, cw - 1), bh);
+  }
+  const ticks = shownTicks();
+  document.getElementById("tick-label").textContent =
+    S.skipEmpty && ticks.length < NT ? `${ticks.length} / ${NT} ticks` : `${NT} ticks`;
+}
+tl.addEventListener("click", e => {
+  const r = tl.getBoundingClientRect();
+  const tick = Math.floor((e.clientX - r.left) / r.width * NT);
+  let best = null, bd = Infinity;
+  for (const p of panels) {
+    const d = Math.abs(p.tick - tick);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (best) best.canvas.parentElement.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+/* ============================ controls ============================ */
+const zoomSlider = document.getElementById("zoom");
+function setZoom(z) {
+  S.zoom = Math.max(+zoomSlider.min, Math.min(+zoomSlider.max, Math.round(z)));
+  zoomSlider.value = S.zoom;
+  buildPanels();
+}
+// default zoom adapts to the lattice size so plaquettes start at a usable scale
+S.zoom = Math.max(180, Math.min(480, Math.round(bounds.w * 36) + 50));
+zoomSlider.value = S.zoom;
+zoomSlider.addEventListener("input", e => setZoom(+e.target.value));
+document.getElementById("zoom-in").addEventListener("click", () => setZoom(S.zoom + 40));
+document.getElementById("zoom-out").addEventListener("click", () => setZoom(S.zoom - 40));
+slicesEl.addEventListener("wheel", e => {
+  if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom(S.zoom - Math.sign(e.deltaY) * 25); }
+}, { passive: false });
+document.getElementById("skip-empty").addEventListener("change", e => { S.skipEmpty = e.target.checked; buildPanels(); });
+document.getElementById("show-gates").addEventListener("change", e => { S.showOps = e.target.checked; buildPanels(); });
+document.getElementById("filter").addEventListener("input", e => { S.filter = e.target.value; buildSidebar(); });
+for (const kind of ["detector", "missing", "observable"]) {
+  document.getElementById("show-" + kind).addEventListener("change", e => {
+    S.overlayKinds[kind] = e.target.checked; drawAll();
+  });
+}
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "+" || e.key === "=") setZoom(S.zoom + 40);
+  else if (e.key === "-" || e.key === "_") setZoom(S.zoom - 40);
+  else if (e.key === "z" && (e.metaKey || e.ctrlKey)) { S.factors.pop(); update(); e.preventDefault(); }
+  else if (e.key === "Escape") hidePopup();
+});
+window.addEventListener("resize", () => drawTimeline());
+
+/* ============================ init / update ============================ */
+function update() {
+  productRegions = computeProductRegions();
+  productRecs = computeProductRecs();
+  buildSidebar();
+  buildChips();
+  buildExport();
+  buildPanels();
+}
+
+document.getElementById("title").textContent = DATA.title || "Detector Basis Explorer";
+document.getElementById("subtitle").textContent =
+  `${T.filter(t => t.kind === "detector").length} detectors · ` +
+  `${DATA.num_missing} missing · ` +
+  `${T.filter(t => t.kind === "observable").length} observables · ` +
+  `${NT} ticks · ${QUBITS.length} qubits`;
+
+// default target: first missing degree of freedom, if any
+const firstMissing = T.findIndex(t => t.kind === "missing");
+if (firstMissing >= 0) S.target = firstMissing;
+update();
+</script>
+</body>
+</html>
